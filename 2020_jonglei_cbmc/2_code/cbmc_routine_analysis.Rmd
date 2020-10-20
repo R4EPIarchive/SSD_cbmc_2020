@@ -1,0 +1,989 @@
+---
+title: "Routine Jonglei State CBMC data analysis"
+output:
+  word_document:
+    keep_md: yes
+  html_document:
+    df_print: paged
+editor_options: 
+  chunk_output_type: console
+---
+
+
+
+
+<!-- ## Installing and loading required packages  -->
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// setup \\\
+--------------------------------------------------------------------------------
+
+Several packages are required for different aspects of  analysis with *R*. 
+You will need to install these before starting. 
+
+These packages can be quite large and may take a while to download in the
+field. If you have access to a USB key with these packages, it makes sense to
+copy and paste the packages into your computer's R package library 
+(run the command .libPaths() to see the folder path). 
+
+For help installing packages, please visit https://r4epis.netlify.com/welcome
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+
+```{r setup, include=FALSE, results='hide', message=FALSE, warning=FALSE}
+## hide all code chunks in the output, but show errors
+knitr::opts_chunk$set(echo = FALSE,       # hide all code chunks in output
+                      error = TRUE,       # show errors if they appear, but don't stop
+                      fig.width = 6*1.25, # Figure width
+                      fig.height = 6,      # Figure height
+                      warning = FALSE,
+                      message = FALSE
+                     )
+
+
+
+## set default NA to - in output, define figure width/height
+options(knitr.kable.NA = "-")
+
+
+
+## Installing required packages for this template
+required_packages <- c("knitr",       # create output docs
+                       "here",        # find your files
+                       "dplyr",       # clean/shape data
+                       "forcats",     # clean/shape data
+                       "stringr",     # clean text
+                       "rio",         # read in data
+                       "ggplot2",     # create plots and charts
+                       "patchwork",   # combine plots in one
+                       "sitrep",      # MSF field epi functions
+                       "linelist",    # Functions for cleaning/standardising data/dates
+                       "matchmaker",  # dictionary-based standardization of variables
+                       "incidence",   # create epicurves
+                       "aweek",       # define epi weeks
+                       "epitrix",     # epi helpers and tricks
+                       "sf",          # encode spatial vector data
+                       "ggspatial",   # plot maps
+                       "xts",         # moving \naverages
+                       "zoo",         # moving \naverages
+                       "classInt",    # specifying breaks for maps
+                       "excel.link",  # opening password protected files
+                       "askpass",     # opening password protected files
+                       "tsibble",     # time series data
+                       "slider",      # time series data
+                       "tidyr",       # wide/long adjustements to data
+                       "gt",          # make nice tables
+                       "data.table",   # for taking last and first values from dataframes
+                       "patchwork")   # combining plots together
+
+for (pkg in required_packages) {
+  # install packages if not already present
+  if (!pkg %in% rownames(installed.packages())) {
+    install.packages(pkg)
+  }
+  
+  # load packages to this current session 
+  library(pkg, character.only = TRUE)
+}
+
+
+## Set default options for plots and charts
+
+## set default text size to 16 for plots
+## give classic black/white axes for plots
+ggplot2::theme_set(theme_classic(base_size = 18))
+
+```
+
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// define_current_week \\\
+--------------------------------------------------------------------------------
+
+You need to set the week you want to report on. Generally, this is the previous
+week. Put it below.
+
+aweek::set_week_start will define the beginning of the week. The standard is
+Monday.
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+<!-- **This section will need to be updated weekly** -->
+
+```{r define_current_week}
+## set current week 
+reporting_week <- yearweek("2020 W39")
+
+## Month of COVID-19 analysis
+reporting_month <- yearmonth(reporting_week)
+
+```
+
+<!-- Data as reported by `r reporting_week` and the data on outbreak prone diseases comes primarily from OPD data but also CBMC sites for diseases such as malaria and AWD. -->
+
+<!-- ## Source R function required to import MSF data from OPD tools -->
+
+```{r read_msf_data_function}
+
+source(here::here("2020_jonglei_cbmc/5_functions/read_msf_data.R"))
+
+source(here::here("2020_jonglei_cbmc/5_functions/aaa_get_latest_data.R"))
+
+source(here::here("2020_jonglei_cbmc/5_functions/aaa_file_name_helpers.R"))
+
+source(here::here("2020_jonglei_cbmc/5_functions/current_data.R"))
+```
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// read_cbmc data \\\
+--------------------------------------------------------------------------------
+This section is for the following datasets
+CBMC data from each of the 4 sites
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r read_cbmc_data, warning = FALSE, message = FALSE}
+### Read in data ---------------------------------------------------------------
+
+## Nyambor
+nyambor_raw <- rio::import(current_nyambor, 
+                             skip = 2,
+                              which = "Nyambor iCCM") %>% 
+  ## make all variable names lower case
+  janitor::clean_names()
+  
+
+### Nyatim
+nyatim_raw <- rio::import(current_nyatim, 
+                              skip = 2,
+                              which = "Nyatim iCCM") %>% 
+  ## make all variable names lower case
+  janitor::clean_names()
+
+
+## Pathai
+pathai_raw <- rio::import(current_pathai, 
+                              skip = 2,
+                              which = "Pathai PHCU") %>% 
+  ## make all variable names lower case
+  janitor::clean_names()
+
+
+## Riang
+riang_raw <- rio::import(current_riang, 
+                              which = "Riang iCCM",
+                              skip = 2)  %>% 
+  ## make all variable names lower case
+  janitor::clean_names()
+
+## Yuai
+yuai_raw <- rio::import(current_yuai, 
+                              which = "Yuai iCCM",
+                              skip = 2) %>% 
+  ## make all variable names lower case
+  janitor::clean_names()
+
+
+``` 
+
+<!-- ## Prep for all datasets -->
+<!-- - Add site variable to all -->
+<!-- - combine all datasets -->
+<!-- - create epiweek variable -->
+
+```{r prep_all_data}
+
+## Add site variable to all
+nyambor_cl <- nyambor_raw %>% 
+  mutate(site = "nyambor")
+
+nyatim_cl <- nyatim_raw %>% 
+  mutate(site = "nyatim")
+
+
+pathai_cl <- pathai_raw %>% 
+  mutate(site = "pathai")
+
+riang_cl <- riang_raw %>% 
+  mutate(site = "riang")
+
+
+yuai_cl <- yuai_raw %>% 
+  mutate(site = "yuai")
+
+## Join all datasets together
+all_cbmc <- bind_rows(nyambor_cl, nyatim_cl, pathai_cl, riang_cl, yuai_cl) %>% 
+  ## Add epiweek variable
+  mutate(epiweek = yearweek(periodname)) %>% 
+  ## ad month variable
+  mutate(month = yearmonth(epiweek))
+
+```
+
+<!-- ## Create necessary variables -->
+<!-- - total cbmc consultations (all ages) -->
+<!-- - total rdt pos (all ages) -->
+<!-- - proportion of rdt pos out of all consultations -->
+<!-- - proportional morbidity malaria -->
+<!-- - total awd consultations -->
+<!-- - proportional morbidity awd -->
+<!-- - total pneumonia -->
+<!-- - proportional morbidity pneumonia -->
+<!-- - total SAM or oedema -->
+<!-- - proportion of SAM or oedema -->
+
+
+```{r make_new_variables}
+
+all_cbmc <-  all_cbmc %>% 
+  rowwise() %>% 
+  ## total cbmc consultaitons
+  mutate(total_consultations = sum(iccm_consultations_2_5m,
+                                   iccm_consultations_6_59m,
+                                   iccm_consultations_5_14y,
+                                   iccm_consultations_15y,
+                                   na.rm = TRUE)) %>% 
+  ## total RDT completed
+  mutate(total_rdt_completed = sum(iccm_rdt_performed_2_5m,
+                                   iccm_rdt_performed_6_59m,
+                                   iccm_rdt_performed_5_14y,
+                                   iccm_rdt_performed_15y,
+                                   na.rm = TRUE)) %>% 
+  ## total malaria rdt pos
+  mutate(total_rdt_pos = sum(iccm_rdt_positive_falciparum_2_5m,
+                             iccm_rdt_positive_falciparum_6_59m,
+                             iccm_rdt_positive_falciparum_5_14y,
+                             iccm_rdt_positive_falciparum_15y,
+                             na.rm = TRUE)) %>% 
+  ## total malaria diagnoses
+  mutate(total_malaria_diagnoses = sum(ccm_total_malaria_diagnoses_2_5m,
+                                       ccm_total_malaria_diagnoses_6_59m,
+                                       ccm_total_malaria_diagnoses_5_14y,
+                                       ccm_total_malaria_diagnoses_15y,
+                                       na.rm = TRUE)) %>% 
+  ## total awd
+  mutate(total_awd = sum(iccm_acute_watery_diarrhoea_2_5m, 
+                         iccm_acute_watery_diarrhoea_6_59m,
+                         iccm_acute_watery_diarrhoea_5_14y,
+                         iccm_acute_watery_diarrhoea_15y,
+                         na.rm = TRUE)) %>% 
+  ## total rti
+  mutate(total_rti = sum(iccm_diagnosis_uncomplicated_pneumonia_2_5m,
+                         iccm_diagnosis_uncomplicated_pneumonia_6_59m, 
+                         iccm_diagnosis_uncomplicated_pneumonia_5_14y,
+                         iccm_diagnosis_uncomplicated_pneumonia_15y,
+                         iccm_diagnosis_cough_cold_2_5m,
+                         iccm_diagnosis_cough_cold_6_59m,
+                         iccm_diagnosis_cough_cold_5_14y,
+                         iccm_diagnosis_cough_cold_15y,
+                         na.rm = TRUE)) %>% 
+  ## total rti 2_5m
+  mutate(total_rti_2_5m = sum(iccm_diagnosis_uncomplicated_pneumonia_2_5m,
+                              iccm_diagnosis_cough_cold_2_5m,
+                              na.rm = TRUE)) %>% 
+  ## total rti 6_59m
+  mutate(total_rti_6_59m  = sum(iccm_diagnosis_uncomplicated_pneumonia_6_59m,
+                              iccm_diagnosis_cough_cold_6_59m,
+                              na.rm = TRUE)) %>%
+  ## total rti 5-14y
+  mutate(total_rti_5_14y = sum(iccm_diagnosis_uncomplicated_pneumonia_5_14y,
+                               iccm_diagnosis_cough_cold_5_14y,
+                               na.rm = TRUE)) %>% 
+  ## total rti 15 y
+  mutate(total_rti_15y = sum(iccm_diagnosis_uncomplicated_pneumonia_15y,
+                               iccm_diagnosis_cough_cold_15y,
+                               na.rm = TRUE)) %>% 
+  ## total SAM or oedema under 6-59m
+  mutate(total_sam = sum(iccm_muac_sam_6_59m, 
+                         iccm_bilateral_oedema_6_59m,
+                         na.rm = TRUE)) %>% 
+  ## total number of children 6_59m muac screened
+  mutate(total_6_59m_muac_screened = sum(iccm_muac_no_am_6_59m, 
+                                    iccm_muac_mam_6_59m, 
+                                    iccm_muac_sam_6_59m,
+                                    na.rm = TRUE)) %>% 
+  ## total number of children 6_59m muac screened or oedema
+  mutate(total_6_59m_muac_screened_oedema = sum(total_6_59m_muac_screened,
+                                                iccm_bilateral_oedema_6_59m,
+                                                na.rm = TRUE))
+ 
+```
+
+<!-- ## Make a database that can be used to calculate monthly values per site -->
+<!-- - consultations numbers -->
+<!-- - consultations numbers per age group -->
+<!-- - proportion malaria positive -->
+<!-- - number of malaria positive by age group -->
+<!-- - total rdt positive -->
+<!-- - total malaria diagnoses -->
+
+```{r monthly_consultation_database}
+
+all_cbmc_mon <- all_cbmc %>% 
+  ## only keep date up to the reporting month
+  filter(month <= reporting_month) %>% 
+  ##group by site and month
+  group_by(month, site) %>% 
+  ## summarise following variables by month and site
+  summarise(total_consultations = sum(total_consultations, na.rm = TRUE),
+            # iccm consultations 2-5m
+            iccm_consultations_2_5m = sum(iccm_consultations_2_5m, na.rm= TRUE),
+            # iccm consultations 6-59m
+            iccm_consultations_6_59m = sum(iccm_consultations_6_59m, na.rm = TRUE),
+            # iccm_consultations 5-14y
+            iccm_consultations_5_14y = sum(iccm_consultations_5_14y, na.rm = TRUE),
+            # iccm consultations 15y
+            iccm_consultations_15y = sum(iccm_consultations_15y, na.rm = TRUE),
+            # iccm rdt pos 2-5m
+            iccm_rdt_positive_falciparum_2_5m = 
+              sum(iccm_rdt_positive_falciparum_2_5m, na.rm = TRUE),
+            # iccm rdt pos 6-59m
+            iccm_rdt_positive_falciparum_6_59m = 
+              sum(iccm_rdt_positive_falciparum_6_59m, na.rm = TRUE),
+            # iccm rdt pos 5-14y
+            iccm_rdt_positive_falciparum_5_14y = 
+              sum(iccm_rdt_positive_falciparum_5_14y, na.rm = TRUE),
+            # iccm rdt pos 15 y
+            iccm_rdt_positive_falciparum_15y = 
+              sum(iccm_rdt_positive_falciparum_15y, na.rm = TRUE),
+            # total rdt completed
+            total_rdt_completed = sum(total_rdt_completed, na.rm = TRUE),
+            # total rdt positive
+            total_rdt_pos = sum(total_rdt_pos, na.rm = TRUE),
+            ## total malaria diagnoses
+            total_malaria_diagnoses = sum(total_malaria_diagnoses,
+                                          na.rm = TRUE),
+            ## malaria positivity
+            mal_positivity = round((total_rdt_pos/total_rdt_completed)*100,
+                                      digits = 0),
+            ## proportional malaria morbidity
+            proportional_malaria_morbidity = round((total_rdt_pos/total_consultations)*100,
+                                      digits = 0),
+            ## counts of awd per each age group
+            iccm_acute_watery_diarrhoea_2_5m = sum(iccm_acute_watery_diarrhoea_2_5m, na.rm = TRUE),
+            iccm_acute_watery_diarrhoea_6_59m = sum(iccm_acute_watery_diarrhoea_6_59m,  na.rm = TRUE),
+            iccm_acute_watery_diarrhoea_5_14y = sum(iccm_acute_watery_diarrhoea_5_14y, na.rm = TRUE),
+            iccm_acute_watery_diarrhoea_15y = sum(iccm_acute_watery_diarrhoea_15y, na.rm = TRUE),
+            ## total awd
+            total_awd = sum(total_awd, na.rm = TRUE),
+            ## proportional morbidity awd
+            proportional_awd = round((total_awd/total_consultations)*100, 
+                                  digits = 0),
+            ## counts of rti per each age group
+            total_rti_2_5m  = sum(total_rti_2_5m, na.rm = TRUE),
+            total_rti_6_59m  = sum(total_rti_6_59m, na.rm = TRUE),
+            total_rti_5_14y  = sum(total_rti_5_14y, na.rm = TRUE),
+            total_rti_15y  = sum(total_rti_15y, na.rm = TRUE),
+            ## total rti
+            total_rti = sum(total_rti, na.rm = TRUE),
+            ## proportional rti
+            proportional_rti = round((total_rti/total_consultations)*100, 
+                                        digits = 0),
+            ## total sam 6_59m
+            total_sam = sum(total_sam, na.rm = TRUE),
+            ## total 6_59m muac/oedema screened
+            total_6_59m_muac_screened_oedema = sum(total_6_59m_muac_screened_oedema,
+                                                   na.rm = TRUE),
+            ## proportion sam 6_59m
+            proportional_sam = round((total_sam/total_6_59m_muac_screened_oedema)*100,
+                                     digits = 0),
+            ## total muac screened 6-59m
+            total_6_59m_muac_screened = sum(total_6_59m_muac_screened, na.rm = TRUE),
+            ## proportion 6_59m muac screened
+            prop_6_59m_muac_screened = round((total_6_59m_muac_screened/iccm_consultations_6_59m)*100, 
+                                             digits = 0),
+            ## total sam diagnoses
+            iccm_diagnosis_sam_6_59m = sum(iccm_diagnosis_sam_6_59m, 
+                                           na.rm = TRUE),
+            sam_difference = iccm_diagnosis_sam_6_59m - total_sam) %>% 
+  ## convert into a tibble
+  as_tibble() %>% 
+  ## only keep unique values
+  distinct_all()
+```
+
+
+
+<!-- ## Count all CBMC consultations per site and per month -->
+
+```{r consultations_all}
+
+## Make wide dataset for consultations
+all_cbmc_consult_age <- all_cbmc_mon %>% 
+  ## select the variables to keep
+  select(month, site, 
+         iccm_consultations_2_5m, 
+         iccm_consultations_6_59m, 
+         iccm_consultations_5_14y,
+         iccm_consultations_15y) %>% 
+  pivot_longer(cols = c("iccm_consultations_2_5m", 
+                        "iccm_consultations_6_59m",
+                        "iccm_consultations_5_14y",
+                        "iccm_consultations_15y"),
+               names_to = "iccm_consults",
+               values_to = "count") %>% 
+  mutate(cbmc_consultations = factor(iccm_consults, 
+                                     levels = c("iccm_consultations_15y",
+                                                "iccm_consultations_5_14y",                                                                                     "iccm_consultations_6_59m",
+                                                "iccm_consultations_2_5m"),
+                                     labels = c("15y+",
+                                                "5-14yrs", 
+                                                "6-59 months",
+                                                "2-5 months")))
+
+```
+
+
+<!-- ## Malaria positive counts -->
+<!-- Count total malaria RDT positive consultations by age group by site -->
+
+```{r positive_malaria}
+
+## Make wide dataset for malaria
+all_cbmc_mal_pos_age <- all_cbmc_mon %>% 
+  ## select the variables to keep
+  select(month, site, 
+         iccm_rdt_positive_falciparum_2_5m,
+         iccm_rdt_positive_falciparum_6_59m,
+         iccm_rdt_positive_falciparum_5_14y,
+         iccm_rdt_positive_falciparum_15y
+  ) %>% 
+  pivot_longer(cols = c("iccm_rdt_positive_falciparum_2_5m", 
+                        "iccm_rdt_positive_falciparum_6_59m",
+                        "iccm_rdt_positive_falciparum_5_14y",
+                        "iccm_rdt_positive_falciparum_15y"),
+               names_to = "pos_malaria",
+               values_to = "count") %>% 
+  mutate(pos_malaria = factor(pos_malaria, levels = c("iccm_rdt_positive_falciparum_15y",
+                                                      "iccm_rdt_positive_falciparum_5_14y",
+                                                      "iccm_rdt_positive_falciparum_6_59m",
+                                                      "iccm_rdt_positive_falciparum_2_5m"),
+                              labels = c("15y+",
+                                         "5-14yrs", 
+                                         "6-59 months",
+                                         "2-5 months")))
+
+
+```
+
+
+<!-- ## Malaria positivity rate -->
+
+```{r malaria_positivity_rate}
+
+all_cbmc_mal_pos_rate_age <- all_cbmc_mon %>% 
+   ## select the variables to keep
+  select(month, site, mal_positivity) %>%
+  ## remove the data entry errors by only keeping values where % is 100 or less
+  filter(mal_positivity <= 100)
+  
+
+```
+
+<!-- ## Discrepancy database between between malaria RDT positive and malaria diagnoses -->
+
+```{r discrepancy_diag_pos_mal}
+## Counting the actual number of malaria diagnoses and RDT positives per month
+all_cbmc_mal_discrepancy_no <- all_cbmc_mon %>% 
+  ## select variables to keep
+  select(month, site, total_rdt_pos, total_malaria_diagnoses) %>% 
+  ## put the total_rdt_pos and malaria diagnosis in one column
+  pivot_longer(cols = c("total_rdt_pos", "total_malaria_diagnoses"),
+               names_to = "malaria",
+               values_to = "count") %>% 
+  ## change the labels on the malaria variable
+  mutate(malaria = factor(malaria, levels = c("total_rdt_pos",
+                                              "total_malaria_diagnoses"),
+                          labels = c("Total RDT positive",
+                                     "Total malaria diagnoses")))
+
+
+# Counting the difference between rdt positive and total malaria diagnoses per month
+all_cbmc_mal_discrepancy_no2 <- all_cbmc_mon %>% 
+  ## select variables to keep
+  select(month, site, total_rdt_pos, total_malaria_diagnoses) %>% 
+  ##create a difference between the two variables
+  mutate(mal_diff = total_malaria_diagnoses - total_rdt_pos)
+  
+
+## Count number of months with non zero value per site in 2020
+## Nyambor
+nyambor_mal_diff <- all_cbmc_mal_discrepancy_no2 %>% 
+  filter(site == "nyambor" & grepl("2020", month)) %>% 
+  filter(mal_diff != 0)
+  
+
+## Nyatim
+nyatim_mal_diff <- all_cbmc_mal_discrepancy_no2 %>% 
+  filter(site == "nyatim" & grepl("2020", month)) %>% 
+  filter(mal_diff != 0)
+
+
+## Pathai
+pathai_mal_diff <- all_cbmc_mal_discrepancy_no2 %>% 
+  filter(site == "pathai" & grepl("2020", month)) %>% 
+  filter(mal_diff != 0)
+
+## Riang
+riang_mal_diff <- all_cbmc_mal_discrepancy_no2 %>% 
+  filter(site == "riang" & grepl("2020", month)) %>% 
+  filter(mal_diff != 0)
+
+## Yuai
+yuai_mal_diff <- all_cbmc_mal_discrepancy_no2 %>% 
+  filter(site == "yuai" & grepl("2020", month)) %>% 
+  filter(mal_diff != 0)
+
+```
+
+
+
+
+<!-- ## AWD diagnoses by age  -->
+
+```{r awd_diagnoses_age}
+
+all_cbmc_awd_age <- all_cbmc_mon %>% 
+  ## select the variables to keep
+  select(month, site, 
+         iccm_acute_watery_diarrhoea_2_5m,
+         iccm_acute_watery_diarrhoea_6_59m,
+         iccm_acute_watery_diarrhoea_5_14y,
+         iccm_acute_watery_diarrhoea_15y) %>% 
+  ## make a wide dataset
+  pivot_longer(cols = c("iccm_acute_watery_diarrhoea_2_5m", 
+                        "iccm_acute_watery_diarrhoea_6_59m",
+                        "iccm_acute_watery_diarrhoea_5_14y",
+                        "iccm_acute_watery_diarrhoea_15y"),
+               names_to = "awd",
+               values_to = "count") %>% 
+  ## Convert awd to a factor and specify the levels/order and the labels
+  mutate(awd = factor(awd,levels = c("iccm_acute_watery_diarrhoea_15y",
+                                     "iccm_acute_watery_diarrhoea_5_14y",
+                                     "iccm_acute_watery_diarrhoea_6_59m",
+                                     "iccm_acute_watery_diarrhoea_2_5m"
+  ),
+                               labels = c("15y+",
+                                         "5-14yrs", 
+                                         "6-59 months",
+                                         "2-5 months")))
+
+```
+
+<!-- ## rti diagnoses by age  -->
+
+```{r rti_diagnoses_age}
+
+all_cbmc_rti_age <- all_cbmc_mon %>% 
+  ## select the variables to keep
+  select(month,
+         site, 
+         total_rti_2_5m,
+         total_rti_6_59m,
+         total_rti_5_14y,
+         total_rti_15y) %>% 
+  ## make a wide dataset
+  pivot_longer(cols = c("total_rti_2_5m", "total_rti_6_59m",
+                        "total_rti_5_14y", "total_rti_15y"),
+               names_to = "rti",
+               values_to = "count") %>% 
+  ## Convert rti to a factor and specify the levels/order and the labels
+  mutate(rti = factor(rti,
+                              levels = c("total_rti_15y",
+                                         "total_rti_5_14y",
+                                         "total_rti_6_59m",
+                                         "total_rti_2_5m"
+                                         ),
+                              labels = c("15y+",
+                                         "5-14yrs", 
+                                         "6-59 months",
+                                         "2-5 months")))
+
+
+```
+
+
+## Summary  
+This is monthly summary of CBMC data from Lankien. This report contains data up to `r reporting_month` and provides information on consultation numbers, malaria, awd, respiratory tract infections and highlights some data quality issues.
+
+* Consultations  
+In `r reporting_month` there were `r all_cbmc_mon %>% filter(month == reporting_month, site == "nyambor") %>% pull(total_consultations)`, `r all_cbmc_mon %>% filter(month == reporting_month, site == "nyatim") %>% pull(total_consultations)`, `r all_cbmc_mon %>% filter(month == reporting_month, site == "pathai") %>% pull(total_consultations)`, `r all_cbmc_mon %>% filter(month == reporting_month ,site == "riang") %>% pull(total_consultations)` and `r all_cbmc_mon %>% filter(month == reporting_month ,site == "yuai") %>% pull(total_consultations)` consultations in Nyambor, Nyatim, Pathai, Riang and Yuai respectively. Clear differences in consultation patterns across the CBMC sites with Nyambor showing regular  numbers over the time period. The other sites seem to show greater or lesser effects of seasons on consultation numbers.
+  
+
+<!-- #### CBMC consultations-->
+```{r cbmc_consultations}
+
+ggplot() +
+  geom_col(data = all_cbmc_consult_age, aes(x = month, 
+                                 y = count,
+                                 fill = cbmc_consultations)) +
+  scale_x_yearmonth(date_breaks = "4 month", date_labels = "%b-%Y") +
+  # facet by site
+  facet_grid( . ~ site) +
+  ## adjust the size of the plot title
+  theme(plot.title = element_text(size = 14)) +
+  ## rotate x axis text
+  theme(axis.text.x = element_text(angle = 90, size = 10)) +
+  ## Add labels
+  labs(title = "Number of monthly CBMC consultations by age group\n and CBMC site, 2019- 2020",
+       x = "Month",
+       y = "Number of consultations",
+       fill = "Age group",
+       colour = "") +
+  theme(legend.title = element_text(size =14))
+
+```
+
+* Malaria  
+In `r reporting_month` there were `r all_cbmc_mon %>% filter(month == reporting_month ,site == "nyambor")%>%  pull(total_rdt_pos)`, `r all_cbmc_mon %>% filter(month == reporting_month ,site == "nyatim") %>% pull(total_rdt_pos)`, `r all_cbmc_mon %>% filter(month == reporting_month ,site == "pathai") %>% pull(total_rdt_pos)`, `r all_cbmc_mon %>% filter(month == reporting_month ,site == "riang") %>% pull(total_rdt_pos)` and `r all_cbmc_mon %>% filter(month == reporting_month ,site == "yuai") %>% pull(total_rdt_pos)` malaria positive consultations in Nyambor, Nyatim, Pathai, Riang and Yuai respectively. Much larger and clearer malaria peaks in Pathai, Riang and Yuai compared to Nyambor and Nyatim.
+
+<!-- ## Total malaria positive consultations -->
+```{r malaria_positive}
+
+mal_pos <- ggplot() +
+  geom_col(data = all_cbmc_mal_pos_age,
+           aes(x = month, 
+               y = count,
+               fill = pos_malaria )) +
+  ## adjust the ticks on x-axis
+  scale_x_yearweek(date_breaks = "4 month", date_labels = "%b-%Y") +
+  # facet by site
+  facet_grid( . ~ site) +
+  theme(plot.title = element_text(size = 14)) +
+  ## rotate x axis text
+  theme(axis.text.x = element_text(angle = 90,size = 10)) +
+  ## Add labels
+  labs(title = "Number of monthly malaria RDT positive patients by age group\n and CBMC site, 2019- 2020",
+       x = "Month",
+       y = "Number of RDT positive",
+       fill = "Age group",
+       colour = "") +
+  theme(legend.title = element_text(size =14))
+
+```
+
+
+<!-- ## Malaria positivity rate -->
+
+```{r malaria_positive_rate}
+
+mal_pos_rate <- ggplot() +
+  geom_line(data = all_cbmc_mal_pos_rate_age,
+            aes(x = month, 
+                y = mal_positivity)) +
+  ## adjust the ticks on x-axis
+  scale_x_yearweek(date_breaks = "4 month", date_labels = "%b-%Y") +
+  # facet by site and age group
+  facet_grid( ~ site) +
+  theme(plot.title = element_text(size = 14)) +
+  ## rotate x axis text
+  theme(axis.text.x = element_text(angle = 90, size = 10)) +
+  ## Add labels
+  labs(title = "Monthly malaria positivity by CBMC site, 2019- 2020",
+       x = "Month",
+       y = "% RDT positive") +
+  theme(legend.title = element_text(size =14))
+
+```
+
+
+
+<!-- #### Combine case number and positivity -->
+
+```{r combine_malaria_graphs, fig.width = 15, fig.height = 8}
+
+mal_pos + mal_pos_rate
+
+```
+
+<!-- ## Proportional malaria morbidity-->
+
+ - **Proportional malaria morbidity:** In `r reporting_month`, the proportional malaria morbidity was `r all_cbmc_mon %>% filter(month == reporting_month, site == "nyambor") %>% pull(proportional_malaria_morbidity)`, `r all_cbmc_mon %>% filter(month == reporting_month, site == "nyatim") %>% pull(proportional_malaria_morbidity)`, `r all_cbmc_mon %>% filter(month == reporting_month, site == "pathai") %>% pull(proportional_malaria_morbidity)`, `r all_cbmc_mon %>% filter(month == reporting_month, site == "riang") %>% pull(proportional_malaria_morbidity)` and `r all_cbmc_mon %>% filter(month == reporting_month, site == "yuai") %>% pull(proportional_malaria_morbidity)`
+in Nyambor, Nyatim, Pathai, Riang and Yuai respectively.
+
+```{r malaria_proportional_morbidity}
+
+ggplot() +
+  geom_line(data = all_cbmc_mon,
+            aes(x = month, 
+                y = proportional_malaria_morbidity)) +
+  ## adjust the ticks on x-axis
+  scale_x_yearweek(date_breaks = "4 month", date_labels = "%b-%Y") +
+  # facet by site and age group
+  facet_grid( ~ site) +
+  theme(plot.title = element_text(size = 14)) +
+  ## rotate x axis text
+  theme(axis.text.x = element_text(angle = 90,size = 10)) +
+  ## Add labels
+  labs(title = "Monthly proportional malaria morbidity by CBMC site, 2019-2020",
+       x = "Month",
+       y = "% malaria positive consultations") +
+  theme(legend.title = element_text(size =14))
+
+```
+
+ - **Data quality for malaria diagnoses**: The months where there more or fewer malaria diagnoses compared to number of RDT positive malaria cases are highlighted in red. In 2020, we see that there were `r nrow(nyambor_mal_diff)`, `r nrow(nyatim_mal_diff)`, `r nrow(pathai_mal_diff)`, `r nrow(riang_mal_diff)` and `r nrow(yuai_mal_diff)` months with discrepancies in the number of malaria diagnoses and number of RDT positive cases in Nyambor, Nyatim, Pathai, Riang and Yuai respectively.
+  
+
+<!-- #### discrepancies in RDT pos and malaria diagnoses -->
+
+```{r discrepancy_malaria_pos_diagnoses, fig.width = 15}
+
+ggplot() +
+  geom_bar(data = all_cbmc_mal_discrepancy_no2, 
+           aes(x = month,
+               y = mal_diff), stat = "identity", fill = "red2") +
+  scale_x_yearmonth(date_breaks = "4 months", date_labels = "%b %Y") +
+  # facet by site
+  facet_grid( . ~ site) +
+  theme(plot.title = element_text(size = 14)) +
+  ## rotate x axis text
+  theme(axis.text.x = element_text(angle = 90,size = 10)) +
+  ## Add labels
+  labs(title = "Monthly difference between number of malaria diagnoses and number of RDT positive by CBMC site, 2019- 2020",
+       x = "Month",
+       y = "Difference in malaria diagnoses and RDT positive",
+       fill = "",
+       colour = "") +
+  theme(legend.title = element_text(size =14))
+  
+
+```
+
+
+*  AWD  
+In `r reporting_month`, there were `r all_cbmc_mon %>% filter(month == reporting_month, site == "nyambor") %>% pull(total_awd)`,  `r all_cbmc_mon %>% filter(month == reporting_month, site == "nyatim") %>% pull(total_awd)`, `r all_cbmc_mon %>% filter(month == reporting_month, site == "pathai") %>% pull(total_awd)`, `r all_cbmc_mon %>% filter(month == reporting_month, site == "riang") %>% pull(total_awd)` and `r all_cbmc_mon %>% filter(month == reporting_month, site == "yuai") %>% pull(total_awd)` AWD cases in Nyambor, Nyatim, Pathai, Riang and Yuai respectively.
+
+```{r awd_diagnoses}
+
+total_awd_diagnoses <- ggplot() +
+  geom_col(data = all_cbmc_awd_age,
+           aes(x = month, 
+               y = count,
+               fill =awd)) +
+  ## adjust the ticks on x-axis
+  scale_x_yearweek(date_breaks = "4 month", date_labels = "%b-%Y") +
+  # facet by site
+  facet_grid( . ~ site) +
+  ## adjust plot title size
+  theme(plot.title = element_text(size = 14)) +
+  ## rotate x axis text
+  theme(axis.text.x = element_text(angle = 90, size = 10)) +
+  ## Add labels
+  labs(title = "Number of monthly AWD diagnoses by age group and\n CBMC site, 2019- 2020",
+       x = "Month",
+       y = "Number of AWD diagnoses",
+       fill = "Age group",
+       colour = "") +
+  theme(legend.title = element_text(size =14))
+
+```
+
+<!-- ## Proportional morbidity awd cases -->
+
+```{r proportional_morbidity_awd_all_ages}
+
+prop_awd <- ggplot() +
+  geom_line(data = all_cbmc_mon,
+            aes(x = month, 
+                y = proportional_awd)) +
+  ## adjust the ticks on x-axis
+  scale_x_yearweek(date_breaks = "4 month", date_labels = "%b-%Y") +
+  # facet by site and age group
+  facet_grid(.~ site) +
+  theme(plot.title = element_text(size = 14)) +
+  ## rotate x axis text
+  theme(axis.text.x = element_text(angle = 90, size = 10)) +
+  ## Add labels
+  labs(title = "Monthly proportional morbidity AWD, \nCBMC site, 2019- 2020",
+       x = "Month",
+       y = "% AWD consultations") +
+  theme(legend.title = element_text(size =14))
+
+```
+
+
+<!-- #### Combine case number and proportional morbidity awd -->
+
+```{r combine_awd_graphs, fig.width = 15, fig.height = 8}
+
+total_awd_diagnoses + prop_awd
+
+```
+
+
+* Respiratory tract infections  
+In `r reporting_month`, there were `r all_cbmc_mon %>% filter(month == reporting_month, site == "nyambor") %>% pull(total_rti)`,  `r all_cbmc_mon %>% filter(month == reporting_month, site == "nyatim") %>% pull(total_rti)`, `r all_cbmc_mon %>% filter(month == reporting_month, site == "pathai") %>% pull(total_rti)`, `r all_cbmc_mon %>% filter(month == reporting_month, site == "riang") %>% pull(total_rti)` and `r all_cbmc_mon %>% filter(month == reporting_month, site == "yuai") %>% pull(total_rti)` respiratory tract infections (uncomplicated pneumonia/cough/cold) cases in Nyambor, Nyatim, Pathai, Riang and Yuai respectively.
+
+```{r rti_diagnoses}
+
+total_rti_diagnoses <- ggplot() +
+  geom_col(data = all_cbmc_rti_age, aes(x = month, 
+                                 y = count,
+                                 fill = rti)) +
+  ## adjust the ticks on x-axis
+  scale_x_yearweek(date_breaks = "4 month", date_labels = "%b-%Y") +
+  # facet by site
+  facet_grid( . ~ site) +
+  # adjust size of the title
+  theme(plot.title = element_text(size = 14)) +
+  ## rotate x axis text
+  theme(axis.text.x = element_text(angle = 90, size = 10)) +
+  ## Add labels
+  labs(title = "Number of monthly respiratory tract infections by age group\n and CBMC site, 2019- 2020",
+       x = "Month",
+       y = "Number of RTI diagnoses",
+       fill = "Age group") +
+  theme(legend.title = element_text(size =14))
+
+```
+
+<!-- ## Proportional morbidity rti cases -->
+
+```{r proportional_morbidity_rti_all_ages}
+
+prop_rti <- ggplot() +
+  geom_line(data = all_cbmc_mon,
+            aes(x = month, 
+                y = proportional_rti)) +
+  ## adjust the ticks on x-axis
+  scale_x_yearweek(date_breaks = "4 month", date_labels = "%b-%Y") +
+  # facet by site and age group
+  facet_grid(.~ site) +
+  theme(plot.title = element_text(size = 14)) +
+  ## rotate x axis text
+  theme(axis.text.x = element_text(angle = 90, size = 10)) +
+  ## Add labels
+  labs(title = "Monthly proportional morbidity RTIs,\n CBMC site, 2019- 2020",
+       x = "Month",
+       y = "% RTI consultations") +
+  theme(legend.title = element_text(size =14))
+
+```
+
+
+<!-- #### Combine case number and proportional morbidity rti -->
+
+```{r combine_rti_graphs, fig.width = 15, fig.height = 8}
+
+total_rti_diagnoses + prop_rti
+
+```
+
+
+* Malnutrition  
+
+In `r reporting_month`, there were `r all_cbmc_mon %>% filter(month == reporting_month, site == "nyambor") %>% pull(total_sam)`,  `r all_cbmc_mon %>% filter(month == reporting_month, site == "nyatim") %>% pull(total_sam)`, `r all_cbmc_mon %>% filter(month == reporting_month, site == "pathai") %>% pull(total_sam)`, `r all_cbmc_mon %>% filter(month == reporting_month, site == "riang") %>% pull(total_sam)` and `r all_cbmc_mon %>% filter(month == reporting_month, site == "yuai") %>% pull(total_sam)` children aged 6-59m with severe acute  malnutrition based on MUAC or oedema in Nyambor, Nyatim, Pathai, Riang and Yuai respectively. Nyambor shows a higher stable rate of malnutrition compared to the other sites, but it could be related to the population size of the catchment area of the Nyambor CBMC.
+
+```{r sam_diagnoses}
+
+total_sam_diagnoses <- ggplot() +
+  geom_col(data = all_cbmc_mon, 
+           aes(x = month, 
+               y = total_sam),
+           fill= "red") +
+  ## adjust the ticks on x-axis
+  scale_x_yearweek(date_breaks = "4 month", date_labels = "%b-%Y") +
+  # facet by site
+  facet_grid( . ~ site) +
+  theme(plot.title = element_text(size = 14)) +
+  ## rotate x axis text
+  theme(axis.text.x = element_text(angle = 90, size = 10)) +
+  ## Add labels
+  labs(title = "Number of monthly SAM diagnoses by CBMC site, 2019- 2020",
+       x = "Month",
+       y = "Number of SAM diagnoses",
+       colour = "") +
+  theme(legend.title = element_text(size =14))
+
+```
+
+<!-- ## Proportional sam -->
+
+```{r proportional_sam}
+
+prop_sam <- ggplot() +
+  geom_line(data = all_cbmc_mon,
+            aes(x = month, 
+                y = proportional_sam)) +
+  ## adjust the ticks on x-axis
+  scale_x_yearweek(date_breaks = "4 month", date_labels = "%b-%Y") +
+  # facet by site
+  facet_grid(.~ site) +
+  theme(plot.title = element_text(size = 14)) +
+  ## rotate x axis text
+  theme(axis.text.x = element_text(angle = 90, size = 10)) +
+  ## Add labels
+  labs(title = "Monthly proportional SAM, CBMC site, 2019- 2020",
+       x = "Month",
+       y = "% SAM among those screened") +
+  theme(legend.title = element_text(size =14))
+
+```
+
+<!-- #### Combine case number and % sam -->
+
+```{r combine_sam_graphs, fig.width = 15, fig.height = 8}
+
+total_sam_diagnoses + prop_sam
+
+```
+
+<!-- ## Proportional children aged 6_59m who were screened -->
+ - **Data quality for severe acute malnutrition**: Normally all children aged between 6-59 months should receive a MUAC screening. As can be seen below, the proportion that are screened has improved over time in all projects but the team need support in providing accurate figures as many times the proportion of children aged 6-59m screened by a MUAC exceeds the total number of children aged 6-59m consulted (red line set to 100%). Riang seems to have improved a lot whereby earlier reports showe less than ideal MUAC screening of children aged 6-59m.
+ 
+- As can be seen in the graph showing the monthly difference between reported SAM diagnoses and the number of SAM patients based on MUAC/oedema, the team in Nyambor are consistently having problems harmonising their numbers (i.e. above or below the red line set at 0 for no difference). The other CBMC sites also have difficulty but less extreme and less often compared to Nyambor.
+
+```{r proportional_muac_screened}
+
+prop_screened <- ggplot() +
+  geom_line(data = all_cbmc_mon,
+            aes(x = month, 
+                y = prop_6_59m_muac_screened)) +
+  ## adjust the ticks on x-axis
+  scale_x_yearweek(date_breaks = "4 month", date_labels = "%b-%Y") +
+  # facet by site
+  facet_grid(.~ site) +
+  ## add a hline
+  geom_hline(yintercept = 100, colour = "red3", alpha = 0.5) +
+  theme(plot.title = element_text(size = 14)) +
+  ## rotate x axis text
+  theme(axis.text.x = element_text(angle = 90, size = 10)) +
+  ## Add labels
+  labs(title = "Monthly proportion 6-59m patients that received a MUAC screening,\n CBMC site, 2019- 2020",
+       x = "Month",
+       y = "% 6-59m received MUAC screening") +
+  theme(legend.title = element_text(size =14))
+
+```
+
+
+```{r difference_sam_diagnoses_muac_results}
+
+diff_diagnosis_muac <- ggplot() +
+  geom_line(data = all_cbmc_mon,
+            aes(x = month, 
+                y = sam_difference)) +
+  ## adjust the ticks on x-axis
+  scale_x_yearweek(date_breaks = "4 month", date_labels = "%b-%Y") +
+  # facet by site
+  facet_grid(.~ site) +
+  ## add a hline
+  geom_hline(yintercept = 0, colour = "red3", alpha = 0.5) +
+  ## adjust the size of the text
+  theme(plot.title = element_text(size = 14)) +
+  ## rotate x axis text
+  theme(axis.text.x = element_text(angle = 90, size = 10)) +
+  ## Add labels
+  labs(title = "Monthly difference between SAM diagnoses and MUAC-based SAM,\n CBMC site, 2019- 2020",
+       x = "Month",
+       y = "Difference in SAM diagnoses and MUAC/oedema results") +
+  theme(legend.title = element_text(size =14))
+
+```
+
+
+```{r combine_sam_data_quality_graphs, fig.width = 15, fig.height = 8}
+
+prop_screened  + diff_diagnosis_muac
+
+```
